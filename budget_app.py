@@ -956,7 +956,7 @@ def main():
             st.dataframe(show_df, use_container_width=True, hide_index=True)
 
             # ---------- CLEAN & CATEGORIZE ----------
-           with st.expander("🧹 Clean & Categorize Transactions"):
+with st.expander("🧹 Clean & Categorize Transactions"):
     st.markdown("Refine and correct your transactions.")
 
     # Filters
