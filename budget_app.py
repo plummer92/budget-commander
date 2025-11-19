@@ -956,127 +956,102 @@ def main():
             st.dataframe(show_df, use_container_width=True, hide_index=True)
 
             # ---------- CLEAN & CATEGORIZE ----------
-            with st.expander("🧹 Clean & Categorize Transactions"):
-                st.write(
-                    "Filter by description and/or current category, select rows, and set a new category."
-                )
+           with st.expander("🧹 Clean & Categorize Transactions"):
+    st.markdown("Refine and correct your transactions.")
 
-                # Work with raw df_all (has id, tx_date, description, category, amount)
-                work_df = df_all.copy()
+    # Filters
+    search = st.text_input("Search description")
+    existing_cats = sorted(df_clean["category"].dropna().astype(str).unique().tolist())
+    default_filter = ["Other"] if "Other" in existing_cats else []
 
-                search = st.text_input(
-                    "Search in description (e.g. 'McDonald', 'Shell', 'Walmart')",
-                    "",
-                )
+    cat_filter = st.multiselect(
+        "Filter by current category",
+        options=existing_cats,
+        default=default_filter,
+    )
 
-                # Build category filter options
-                existing_cats = sorted(
-                    work_df["category"].dropna().astype(str).unique().tolist()
-                )
+    # Filter logic
+    work_df = df_clean.copy()
+    if search:
+        work_df = work_df[
+            work_df["description"].astype(str).str.contains(search, case=False)
+        ]
+    if cat_filter:
+        work_df = work_df[work_df["category"].isin(cat_filter)]
 
-                # 🚩 Default filter to "Other" so recategorized items vanish from the list
-                default_filter = ["Other"] if "Other" in existing_cats else []
-                cat_filter = st.multiselect(
-                    "Filter by current category (optional)",
-                    options=existing_cats,
-                    default=default_filter,
-                )
+    # No results
+    if work_df.empty:
+        st.info("No transactions match your filters.")
+    else:
+        st.write(f"{len(work_df)} transaction(s) match your filters.")
 
-                # Apply filters
-                if search:
-                    work_df = work_df[
-                        work_df["description"]
-                        .astype(str)
-                        .str.contains(search, case=False, na=False)
-                    ]
-                if cat_filter:
-                    work_df = work_df[work_df["category"].isin(cat_filter)]
+        # Build labels
+        option_labels = []
+        label_to_id = {}
+        for _, row in work_df.iterrows():
+            label = (
+                f"#{row['id']} | {row['tx_date']} | {row['category']} | "
+                f"${row['amount']:.2f} | {str(row['description'])[:40]}"
+            )
+            option_labels.append(label)
+            label_to_id[label] = int(row["id"])
 
-                                if work_df.empty:
-                    st.info("No transactions match your filters yet.")
-                else:
-                    st.write(f"{len(work_df)} transaction(s) match your filters.")
+        # Select rows
+        selected_labels = st.multiselect(
+            "Select transactions to recategorize",
+            options=option_labels,
+        )
+        selected_ids = [label_to_id[l] for l in selected_labels]
 
-                    # Build label -> id mapping for multiselect
-                    option_labels = []
-                    label_to_id = {}
-                    for _, row in work_df.iterrows():
-                        label = (
-                            f"#{row['id']} | {row['tx_date']} | {row['category']} | "
-                            f"${row['amount']:.2f} | {str(row['description'])[:40]}"
-                        )
-                        option_labels.append(label)
-                        label_to_id[label] = int(row["id"])
+        # Category choice
+        new_cat = st.selectbox(
+            "New category",
+            WEEKLY_CATEGORIES + MONTHLY_CATEGORIES + ["Other"],
+        )
 
-                    selected_labels = st.multiselect(
-                        "Select transactions to recategorize",
-                        options=option_labels,
+        # Suggest rule pattern
+        suggested_pattern = ""
+        if selected_ids:
+            first_id = selected_ids[0]
+            first_desc = (
+                work_df.loc[work_df["id"] == first_id, "description"]
+                .astype(str)
+                .iloc[0]
+            )
+            suggested_pattern = first_desc.split()[0][:20].upper()
+
+        rule_pattern = st.text_input(
+            "Optional: Save a rule (text to match in description)",
+            value=suggested_pattern,
+            help="Example: WALMART, SHELL, MCDONALD — future matching 'Other' transactions auto-categorize.",
+        )
+
+        # Apply
+        if st.button("Apply new category to selected"):
+            if not selected_ids:
+                st.warning("Select at least one transaction.")
+            else:
+                update_transaction_categories(selected_ids, new_cat)
+
+                msg = f"Updated {len(selected_ids)} transaction(s) to category '{new_cat}'."
+                if rule_pattern.strip():
+                    add_or_update_rule(rule_pattern.strip().upper(), new_cat)
+                    msg += (
+                        f" Saved rule: '{rule_pattern.strip().upper()}' → {new_cat}."
                     )
-                    selected_ids = [label_to_id[l] for l in selected_labels]
+                st.success(msg)
+                st.rerun()
 
-                    new_cat = st.selectbox(
-                        "New category",
-                        WEEKLY_CATEGORIES + MONTHLY_CATEGORIES + ["Other"],
-                    )
+    st.markdown("---")
 
-                    # Suggest a pattern based on the first selected description
-                    suggested_pattern = ""
-                    if selected_ids:
-                        first_id = selected_ids[0]
-                        first_desc = (
-                            work_df.loc[work_df["id"] == first_id, "description"]
-                            .astype(str)
-                            .iloc[0]
-                        )
-                        # Simple heuristic: first word, uppercased
-                        suggested_pattern = first_desc.split()[0][:20].upper()
-
-                    rule_pattern = st.text_input(
-                        "Optional: save an auto-category rule (match text in description)",
-                        value=suggested_pattern,
-                        help=(
-                            "Example: WALMART, SHELL, MCDONALD. Any future 'Other' transaction whose "
-                            "description contains this text will be auto-set to the selected category."
-                        ),
-                    )
-
-                    if st.button("Apply new category to selected"):
-                        if not selected_ids:
-                            st.warning("Select at least one transaction first.")
-                        else:
-                            update_transaction_categories(selected_ids, new_cat)
-
-                            msg = f"Updated {len(selected_ids)} transaction(s) to category '{new_cat}'."
-                            if rule_pattern.strip():
-                                add_or_update_rule(rule_pattern.strip().upper(), new_cat)
-                                msg += (
-                                    f" Saved rule: descriptions containing "
-                                    f"'{rule_pattern.strip().upper()}' → {new_cat}."
-                                )
-                            st.success(msg)
-                            st.rerun()
-
-                st.markdown("---")
-                if st.button("⚡ Auto-categorize 'Other' using saved rules"):
-                    updated = apply_rules_to_other()
-                    if updated > 0:
-                        st.success(
-                            f"Auto-categorized {updated} 'Other' transaction(s) based on your rules."
-                        )
-                        st.rerun()
-                    else:
-                        st.info("No 'Other' transactions matched your current rules.")
-
-                st.markdown("---")
-                if st.button("⚡ Auto-categorize 'Other' using saved rules"):
-                    updated = apply_rules_to_other()
-                    if updated > 0:
-                        st.success(
-                            f"Auto-categorized {updated} 'Other' transaction(s) based on your rules."
-                        )
-                        st.rerun()
-                    else:
-                        st.info("No 'Other' transactions matched your current rules.")
+    # Auto categorize using saved rules
+    if st.button("⚡ Auto-categorize 'Other' using saved rules"):
+        updated = apply_rules_to_other()
+        if updated > 0:
+            st.success(f"Auto-categorized {updated} 'Other' transaction(s).")
+            st.rerun()
+        else:
+            st.info("No 'Other' transactions matched any rules.")
 
 
 
