@@ -118,6 +118,19 @@ def init_db():
         """
     )
 
+        # Bills / fixed expenses
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            frequency TEXT NOT NULL DEFAULT 'monthly'
+        )
+        """
+    )
+
+
     conn.commit()
     conn.close()
 
@@ -280,6 +293,51 @@ def get_month_bounds(dt: date):
     last_day = monthrange(dt.year, dt.month)[1]
     last = dt.replace(day=last_day)
     return first, last
+
+# =================== BILLS & FIXED EXPENSES ===================
+
+def get_bills_df():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM bills ORDER BY name", conn)
+    conn.close()
+    return df
+
+def add_bill(name: str, amount: float, frequency: str = "monthly"):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO bills (name, amount, frequency) VALUES (?, ?, ?)",
+        (name, amount, frequency),
+    )
+    conn.commit()
+    conn.close()
+
+def delete_bill(bill_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM bills WHERE id = ?", (bill_id,))
+    conn.commit()
+    conn.close()
+
+def compute_monthly_bills():
+    """For now we treat everything as monthly."""
+    df = get_bills_df()
+    if df.empty:
+        return 0.0
+    return float(df["amount"].sum())
+
+def compute_per_paycheck_bills():
+    """Spread monthly bills across your pay periods."""
+    monthly_total = compute_monthly_bills()
+    if monthly_total == 0:
+        return 0.0
+    settings = get_pay_period_settings()
+    period_days = settings["period_days"]
+    # Approx # of pay periods per year
+    periods_per_year = 365 / period_days
+    yearly_bills = monthly_total * 12
+    return yearly_bills / periods_per_year
+
 
 
 def get_pay_period_settings():
@@ -842,8 +900,8 @@ def main():
                 st.sidebar.success("Transaction saved! +5 XP")
 
     # ---------- TABS ----------
-    tab_dash, tab_tx, tab_import, tab_wheel, tab_badges, tab_coach = st.tabs(
-        ["📊 Dashboard", "📜 Transactions", "📂 Import CSV", "🎡 Spin Wheel", "🏅 Badges", "🧠 Money Coach"]
+    tab_dash, tab_tx, tab_bills, tab_import, tab_wheel, tab_badges, tab_coach = st.tabs(
+        ["📊 Dashboard", "📜 Transactions", "🏦 Bills & Fixed", "📂 Import CSV", "🎡 Spin Wheel", "🏅 Badges", "🧠 Money Coach"]
     )
 
     # ===== DASHBOARD TAB =====
@@ -866,6 +924,43 @@ def main():
             if start_date > end_date:
                 st.warning("Start date is after end date. Swapping them.")
                 start_date, end_date = end_date, start_date
+        st.markdown("---")
+        st.subheader("🍯 Paycheck Pot View")
+
+        # Compute income and expenses for the *current* pay period
+        pp_start, pp_end = get_current_pay_period(today)
+        df_pp = load_transactions(start_date=pp_start, end_date=pp_end)
+
+        if df_pp.empty:
+            st.info("No transactions found for the current pay period yet.")
+        else:
+            income_total = df_pp[df_pp["tx_type"] == "income"]["amount"].sum()
+            expense_total = df_pp[df_pp["tx_type"] == "expense"]["amount"].sum()
+
+            per_paycheck_bills = compute_per_paycheck_bills()
+            pot = income_total - per_paycheck_bills  # before savings/debt extras
+
+            if pot < 0:
+                pot = 0.0  # don't show negative pot, just zero it
+
+            remaining_pot = pot - expense_total
+            remaining_pot = max(remaining_pot, 0.0)
+
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric("Income this pay period", f"${income_total:,.2f}")
+            with col_b:
+                st.metric("Bills share this period", f"${per_paycheck_bills:,.2f}")
+            with col_c:
+                st.metric("Spending pot (after bills)", f"${pot:,.2f}")
+
+            st.metric("Remaining pot (variable spending left)", f"${remaining_pot:,.2f}")
+
+            days_left = (pp_end - today).days + 1
+            if days_left > 0:
+                safe_per_day = remaining_pot / days_left
+                st.caption(f"You have about ${safe_per_day:,.2f} per day for the next {days_left} day(s).")
+
 
         df = load_transactions(start_date, end_date)
         summary = compute_summary(df)
@@ -954,6 +1049,60 @@ def main():
                 }
             )
             st.dataframe(show_df, use_container_width=True, hide_index=True)
+        # ===== BILLS & FIXED TAB =====
+    with tab_bills:
+        st.subheader("🏦 Bills & Fixed Monthly Expenses")
+
+        st.markdown("These are the things that come off the top: mortgage, car, insurance, etc.")
+
+        # Add new bill
+        with st.form("add_bill_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                name = st.text_input("Bill name", placeholder="Mortgage, Car Payment, Internet...")
+            with col2:
+                amount = st.number_input("Monthly amount", min_value=0.0, step=10.0, format="%.2f")
+            with col3:
+                frequency = st.selectbox("Frequency", ["monthly"], index=0)
+
+            submitted = st.form_submit_button("Add / Save Bill")
+            if submitted:
+                if not name or amount <= 0:
+                    st.warning("Please enter a name and amount.")
+                else:
+                    add_bill(name, amount, frequency)
+                    st.success(f"Saved bill: {name} (${amount:.2f}/month)")
+
+        # Show existing bills
+        bills_df = get_bills_df()
+        if bills_df.empty:
+            st.info("No bills added yet. Start by adding mortgage, car, insurance, etc.")
+        else:
+            st.markdown("### Current Bills")
+            show_df = bills_df.copy()
+            show_df = show_df.rename(columns={"name": "Bill", "amount": "Monthly Amount", "frequency": "Frequency"})
+            show_df["Monthly Amount"] = show_df["Monthly Amount"].map(lambda x: f"${x:,.2f}")
+            st.dataframe(show_df[["Bill", "Monthly Amount", "Frequency"]], use_container_width=True, hide_index=True)
+
+            monthly_total = compute_monthly_bills()
+            per_paycheck = compute_per_paycheck_bills()
+            st.markdown(
+                f"**Total monthly bills:** ${monthly_total:,.2f}  \n"
+                f"**Bills per pay period (approx):** ${per_paycheck:,.2f}"
+            )
+
+            # Simple delete control
+            bill_ids = bills_df["id"].tolist()
+            bill_labels = [f"{row['name']} (${row['amount']:.2f})" for _, row in bills_df.iterrows()]
+            del_choice = st.selectbox("Delete a bill", ["-- Select --"] + bill_labels)
+            if del_choice != "-- Select --":
+                idx = bill_labels.index(del_choice)
+                del_id = bill_ids[idx]
+                if st.button("Confirm delete"):
+                    delete_bill(del_id)
+                    st.success("Bill deleted. Reload the page to see updated list.")
+
+
                        # ---------- CLEAN & CATEGORIZE ----------
             with st.expander("🧹 Clean & Categorize Transactions"):
                 st.markdown("Refine and correct your transactions.")
