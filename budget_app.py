@@ -55,6 +55,23 @@ def init_db():
         """
     )
 
+        # Pay period savings + extra debt settings
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS period_adjustments (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            savings REAL NOT NULL DEFAULT 0,
+            extra_debt REAL NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+    # Ensure row exists
+    cur.execute("SELECT COUNT(*) FROM period_adjustments")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO period_adjustments (id, savings, extra_debt) VALUES (1, 0, 0)")
+
+
     # Gamification core stats
     cur.execute(
         """
@@ -293,6 +310,28 @@ def get_month_bounds(dt: date):
     last_day = monthrange(dt.year, dt.month)[1]
     last = dt.replace(day=last_day)
     return first, last
+
+# =============== SAVINGS + EXTRA DEBT HELPERS ===============
+
+def get_period_adjustments():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM period_adjustments WHERE id = 1")
+    row = cur.fetchone()
+    conn.close()
+    return dict(row)
+
+def update_period_adjustments(savings: float, extra_debt: float):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE period_adjustments SET savings = ?, extra_debt = ? WHERE id = 1",
+        (savings, extra_debt),
+    )
+    conn.commit()
+    conn.close()
+
 
 # =================== BILLS & FIXED EXPENSES ===================
 
@@ -924,6 +963,8 @@ def main():
             if start_date > end_date:
                 st.warning("Start date is after end date. Swapping them.")
                 start_date, end_date = end_date, start_date
+        
+        
         st.markdown("---")
         st.subheader("🍯 Paycheck Pot View")
 
@@ -936,10 +977,6 @@ def main():
         else:
             income_total = df_pp[df_pp["tx_type"] == "income"]["amount"].sum()
             expense_total = df_pp[df_pp["tx_type"] == "expense"]["amount"].sum()
-
-            per_paycheck_bills = compute_per_paycheck_bills()
-            pot = income_total - per_paycheck_bills  # before savings/debt extras
-
             if pot < 0:
                 pot = 0.0  # don't show negative pot, just zero it
 
@@ -956,10 +993,44 @@ def main():
 
             st.metric("Remaining pot (variable spending left)", f"${remaining_pot:,.2f}")
 
+            adj = get_period_adjustments()
+            savings_amt = adj["savings"]
+            extra_debt_amt = adj["extra_debt"]
+
+            pot = income_total - per_paycheck_bills - savings_amt - extra_debt_amt
+
+
             days_left = (pp_end - today).days + 1
             if days_left > 0:
                 safe_per_day = remaining_pot / days_left
                 st.caption(f"You have about ${safe_per_day:,.2f} per day for the next {days_left} day(s).")
+
+        st.markdown("### 🧭 Pay-Period Savings & Debt Adjustments")
+
+        adj = get_period_adjustments()
+
+        colA, colB = st.columns(2)
+        with colA:
+            savings_input = st.number_input(
+                "Savings to set aside this pay period",
+                min_value=0.0,
+                value=float(adj["savings"]),
+                step=10.0,
+                format="%.2f",
+            )
+        with colB:
+            debt_input = st.number_input(
+                "Extra debt payoff this period",
+                min_value=0.0,
+                value=float(adj["extra_debt"]),
+                step=10.0,
+                format="%.2f",
+            )
+
+        if st.button("Save adjustments"):
+            update_period_adjustments(savings_input, debt_input)
+            st.success("Saved! These will now be included in your pot calculation.")
+
 
 
         df = load_transactions(start_date, end_date)
