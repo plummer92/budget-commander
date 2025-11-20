@@ -964,11 +964,6 @@ def main():
                 st.warning("Start date is after end date. Swapping them.")
                 start_date, end_date = end_date, start_date
         
-        
-        st.markdown("---")
-        st.subheader("🍯 Paycheck Pot View")
-
-        # Compute income and expenses for the *current* pay period
         st.markdown("---")
         st.subheader("🍯 Paycheck Pot View")
 
@@ -987,6 +982,7 @@ def main():
         if df_pp.empty:
             st.info("No transactions found for the current pay period yet.")
         else:
+            # Income and expenses in this pay period
             income_total = df_pp[df_pp["tx_type"] == "income"]["amount"].sum()
             expense_total = df_pp[df_pp["tx_type"] == "expense"]["amount"].sum()
 
@@ -995,11 +991,11 @@ def main():
             if pot < 0:
                 pot = 0.0
 
-            # Compute remaining pot (after expenses)
+            # Remaining pot (what's left to spend after expenses)
             remaining_pot = pot - expense_total
             remaining_pot = max(remaining_pot, 0.0)
 
-            # Display metrics
+            # Display top metrics
             col_a, col_b, col_c = st.columns(3)
             with col_a:
                 st.metric("Income this pay period", f"${income_total:,.2f}")
@@ -1010,17 +1006,18 @@ def main():
 
             st.metric("Remaining pot (variable spending left)", f"${remaining_pot:,.2f}")
 
-            # Additional adjustments display
+            # Adjustments display
             adj_cols = st.columns(2)
             adj_cols[0].metric("Savings (this period)", f"-${savings_amt:,.2f}")
             adj_cols[1].metric("Extra debt payoff", f"-${extra_debt_amt:,.2f}")
 
-            # Daily safe spending
+            # Safe per day
             days_left = (pp_end - today).days + 1
             if days_left > 0:
                 safe_per_day = remaining_pot / days_left
                 st.caption(f"You have about ${safe_per_day:,.2f} per day for the next {days_left} day(s).")
 
+        
 
         st.markdown("### 🧭 Pay-Period Savings & Debt Adjustments")
 
