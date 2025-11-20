@@ -969,20 +969,37 @@ def main():
         st.subheader("🍯 Paycheck Pot View")
 
         # Compute income and expenses for the *current* pay period
+        st.markdown("---")
+        st.subheader("🍯 Paycheck Pot View")
+
+        # Compute pay-period data
         pp_start, pp_end = get_current_pay_period(today)
         df_pp = load_transactions(start_date=pp_start, end_date=pp_end)
+
+        # Bills per pay period
+        per_paycheck_bills = compute_per_paycheck_bills()
+
+        # Savings/debt adjustments
+        adj = get_period_adjustments()
+        savings_amt = adj["savings"]
+        extra_debt_amt = adj["extra_debt"]
 
         if df_pp.empty:
             st.info("No transactions found for the current pay period yet.")
         else:
             income_total = df_pp[df_pp["tx_type"] == "income"]["amount"].sum()
             expense_total = df_pp[df_pp["tx_type"] == "expense"]["amount"].sum()
-            if pot < 0:
-                pot = 0.0  # don't show negative pot, just zero it
 
+            # Compute pot AFTER bills + savings + extra debt
+            pot = income_total - per_paycheck_bills - savings_amt - extra_debt_amt
+            if pot < 0:
+                pot = 0.0
+
+            # Compute remaining pot (after expenses)
             remaining_pot = pot - expense_total
             remaining_pot = max(remaining_pot, 0.0)
 
+            # Display metrics
             col_a, col_b, col_c = st.columns(3)
             with col_a:
                 st.metric("Income this pay period", f"${income_total:,.2f}")
@@ -993,17 +1010,17 @@ def main():
 
             st.metric("Remaining pot (variable spending left)", f"${remaining_pot:,.2f}")
 
-            adj = get_period_adjustments()
-            savings_amt = adj["savings"]
-            extra_debt_amt = adj["extra_debt"]
+            # Additional adjustments display
+            adj_cols = st.columns(2)
+            adj_cols[0].metric("Savings (this period)", f"-${savings_amt:,.2f}")
+            adj_cols[1].metric("Extra debt payoff", f"-${extra_debt_amt:,.2f}")
 
-            pot = income_total - per_paycheck_bills - savings_amt - extra_debt_amt
-
-
+            # Daily safe spending
             days_left = (pp_end - today).days + 1
             if days_left > 0:
                 safe_per_day = remaining_pot / days_left
                 st.caption(f"You have about ${safe_per_day:,.2f} per day for the next {days_left} day(s).")
+
 
         st.markdown("### 🧭 Pay-Period Savings & Debt Adjustments")
 
