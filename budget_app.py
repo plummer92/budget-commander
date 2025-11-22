@@ -1017,6 +1017,48 @@ def main():
                 safe_per_day = remaining_pot / days_left
                 st.caption(f"You have about ${safe_per_day:,.2f} per day for the next {days_left} day(s).")
 
+                st.markdown("---")
+        st.subheader("📅 Weekly Money After Bills")
+
+        # === 1. Weekly Budget From Paycheck Pot ===
+        weekly_budget = pot / 2  # pot already accounts for bills + savings + debt this period
+
+        # === 2. Weekly share of monthly bills ===
+        monthly_bills = compute_monthly_bills()
+        weekly_bill_cost = monthly_bills / 4.345  # average weeks per month
+
+        # === 3. Week date range (Sunday–Saturday) ===
+        today_dt = datetime.combine(today, datetime.min.time())
+        start_of_week = today_dt - timedelta(days=today_dt.weekday() + 1)  # Sunday
+        end_of_week = start_of_week + timedelta(days=6)
+
+        # === 4. Load transactions for this week ===
+        df_week = load_transactions(
+            start_date=start_of_week.date(),
+            end_date=end_of_week.date()
+        )
+        weekly_spent = df_week[df_week["tx_type"] == "expense"]["amount"].sum()
+
+        # === 5. Weekly remaining money (after bills + spending) ===
+        weekly_available = weekly_budget - weekly_bill_cost - weekly_spent
+        weekly_available = max(weekly_available, 0)
+
+        # === 6. Daily safe amount ===
+        days_left_week = (end_of_week.date() - today).days + 1
+        safe_daily = (weekly_available / days_left_week) if days_left_week > 0 else 0
+
+        # === 7. Display Metrics ===
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Weekly Spending Budget", f"${weekly_budget:,.2f}")
+        col2.metric("Weekly Bill Share", f"-${weekly_bill_cost:,.2f}")
+        col3.metric("Weekly Spending", f"-${weekly_spent:,.2f}")
+
+        st.metric("Weekly Money Left After Bills", f"${weekly_available:,.2f}")
+
+        st.caption(f"Safe amount per day: **${safe_daily:,.2f}**")
+        st.caption(f"Week: {start_of_week.date()} → {end_of_week.date()}")
+
+
         
 
         st.markdown("### 🧭 Pay-Period Savings & Debt Adjustments")
